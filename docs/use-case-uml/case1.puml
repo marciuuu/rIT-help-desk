@@ -1,0 +1,59 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Solicitante" as user
+participant "Interface (PWA)" as pwa
+participant "Backend API (Java)" as api
+database "Banco de Dados" as db
+participant "Serviço de\nNotificação" as notif
+
+' Início do Fluxo
+user -> pwa : Clica em "Novo Chamado"
+pwa -> api : GET /categorias e /setores
+api --> pwa : Retorna dados para popular o formulário
+pwa --> user : Exibe formulário de abertura
+
+user -> pwa : Preenche (Categoria, Título, Setor, Descrição, Anexos) e clica em "Enviar"
+pwa -> api : POST /chamados (Payload com os dados do ticket)
+
+activate api
+' Bloco de Validação
+api -> api : Executa validações de regras de negócio\n(ex: campos obrigatórios, tamanho do título)
+
+alt Validação Falha (Dados Inconsistentes)
+    api --> pwa : Retorna erro (HTTP 400 Bad Request)
+    pwa --> user : Exibe alerta para corrigir os campos
+else Validação Bem-sucedida
+    api -> api : Gera ID único do ticket
+    api -> api : Define status inicial = "Aberto"
+    
+    ' Persistência de Dados
+    api -> db : INSERT INTO chamados (dados do ticket)
+    activate db
+    db --> api : Confirmação de gravação
+    deactivate db
+    
+    ' Trilha de Auditoria
+    api -> db : INSERT INTO log_auditoria (TicketID, Ação: Abertura, Data/Hora)
+    activate db
+    db --> api : Confirmação de log salvo
+    deactivate db
+    
+    ' Disparo de Notificações
+    api -> notif : Dispara notificação (Fila Global de Técnicos)
+    activate notif
+    notif --> api : Confirmação de envio
+    deactivate notif
+    
+    ' Retorno para o usuário
+    api --> pwa : Retorna sucesso (HTTP 201 Created) e dados do ticket gerado
+    pwa --> user : Redireciona para tela de "Chamado Aberto com Sucesso"
+end
+deactivate api
+
+@enduml
