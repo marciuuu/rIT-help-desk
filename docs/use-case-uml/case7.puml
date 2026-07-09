@@ -1,0 +1,58 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Técnico / Admin" as user
+participant "Interface (PWA)" as pwa
+participant "Backend API (Java)" as api
+participant "Módulo de\nAuditoria" as audit
+database "Banco de Dados" as db
+
+== Parte A: Interceptação Automática e Invisível ==
+note over api, db : Qualquer ação de escrita (POST, PUT, PATCH) no sistema\naciona este fluxo de forma transparente.
+
+[-> api : Recebe requisição de mudança (ex: alterar status)
+activate api
+
+api -> api : Executa a regra de negócio principal
+
+' O Módulo de auditoria intercepta a ação
+api -> audit : registrarLog(Ação, ValorAnterior, ValorNovo, UsuarioID)
+activate audit
+
+audit -> audit : Captura o timestamp exato do servidor\ne estrutura o objeto de log
+
+audit -> db : INSERT INTO log_auditoria (tabela append-only)
+activate db
+db --> audit : Confirmação de gravação
+deactivate db
+
+audit --> api : Libera a requisição para prosseguir
+deactivate audit
+
+api -->[ : Retorna sucesso para o usuário final
+deactivate api
+
+== Parte B: Consulta da Linha do Tempo (Lifecycle) ==
+
+user -> pwa : Acessa os detalhes do chamado e clica\nna aba "Histórico / Auditoria"
+pwa -> api : GET /chamados/{id}/auditoria
+
+activate api
+api -> api : Valida token JWT e permissões de leitura
+
+api -> db : SELECT * FROM log_auditoria\nWHERE chamado_id = {id}\nORDER BY data_hora DESC
+activate db
+db --> api : Retorna todos os eventos cronológicos
+deactivate db
+
+api --> pwa : Retorna array JSON com o histórico completo
+deactivate api
+
+pwa --> user : Renderiza uma linha do tempo visual\n(ex: "João alterou de Aberto para Em Andamento às 14:30")
+
+@enduml

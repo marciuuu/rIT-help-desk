@@ -1,0 +1,119 @@
+@startuml
+' Configurações Visuais Profissionais e Organização
+skinparam class {
+  BackgroundColor White
+  ArrowColor #333333
+  BorderColor #333333
+}
+skinparam handwritten false
+skinparam classAttributeIconSize 0
+
+' Mantendo as linhas retas e espaçamento
+skinparam linetype ortho
+skinparam nodesep 70
+skinparam ranksep 70
+
+' ================= Domínios =================
+package "Domínios (Enumeradores)" <<Rectangle>> {
+  enum PerfilAcesso {
+    ADMINISTRADOR
+    TECNICO
+    USUARIO_COMUM
+  }
+  enum StatusChamado {
+    ABERTO
+    EM_ANDAMENTO
+    AGUARDANDO_USUARIO
+    RESOLVIDO
+    FECHADO
+  }
+  enum NivelPrioridade {
+    BAIXA
+    MEDIA
+    ALTA
+    CRITICA
+  }
+  enum TipoVisibilidade {
+    PUBLICO
+    INTERNO_TI
+  }
+}
+
+' ================= Entidades =================
+
+class Departamento {
+  - id: Long
+  - nome: String
+  - sigla: String
+}
+
+class Usuario {
+  - id: Long
+  - nome: String
+  - email: String
+  - hashSenha: String
+  - perfil: PerfilAcesso
+  - ativo: boolean
+  + autenticar(senhaString): boolean
+  + alterarPerfil(novoPerfil): void
+}
+
+class Categoria {
+  - id: Long
+  - nome: String
+  - descricao: String
+  - ativo: boolean
+}
+
+class Chamado {
+  - id: Long
+  - titulo: String
+  - descricao: String
+  - dataAbertura: LocalDateTime
+  - dataFechamento: LocalDateTime
+  - status: StatusChamado
+  - prioridade: NivelPrioridade
+  - tempoSlaHoras: Integer
+  - slaViolado: boolean
+  - solucaoAplicada: String
+  + atualizarStatus(novoStatus): void
+  + calcularSlaRestante(): Integer
+}
+
+class Comentario {
+  - id: Long
+  - texto: String
+  - dataHora: LocalDateTime
+  - visibilidade: TipoVisibilidade
+}
+
+class Anexo {
+  - id: Long
+  - nomeArquivo: String
+  - caminhoUrl: String
+  - tamanhoKb: Integer
+  - dataUpload: LocalDateTime
+}
+
+' ================= Relacionamentos Balanceados =================
+
+' Nível Superior
+Usuario "*" -up-> "1" Departamento : pertence a
+
+' Nível Central (Chamado no meio apontando para cima)
+Chamado "*" -up-> "1" Usuario : aberto por
+Chamado "*" -up-> "0..1" Usuario : atribuído a
+Chamado "*" -up-> "1" Departamento : origem da demanda
+
+' Categoria isolada à esquerda
+Chamado "*" -left-> "1" Categoria : classificado em
+Categoria "0..1" -up-> "*" Categoria : subcategoria de
+
+' Comentário isolado à direita
+Chamado "1" *-right- "*" Comentario : contém
+Comentario "*" -up-> "1" Usuario : enviado por
+
+' Anexo isolado para baixo
+Chamado "1" *-down- "*" Anexo : possui
+
+@enduml

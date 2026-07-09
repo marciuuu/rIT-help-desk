@@ -1,0 +1,59 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Técnico / Admin" as tecnico
+participant "Interface (PWA)" as pwa
+participant "Backend API (Java)" as api
+database "Banco de Dados" as db
+
+' 1. Consulta da Fila (Backlog)
+tecnico -> pwa : Acessa a Fila de Entrada (Backlog)
+pwa -> api : GET /chamados?status=Aberto
+
+activate api
+api -> db : SELECT * FROM chamados WHERE status = 'Aberto'
+activate db
+db --> api : Retorna lista de chamados
+deactivate db
+api --> pwa : Retorna array de objetos JSON
+deactivate api
+
+pwa --> tecnico : Exibe quadro Kanban/Lista com os chamados
+
+' 2. Interação e Atribuição
+tecnico -> pwa : Abre um chamado, define Prioridade\ne clica em "Assumir Chamado"
+pwa -> api : PUT /chamados/{id}/atribuicao\n(Payload: Prioridade, ID do Técnico)
+
+activate api
+' Validação de Segurança (RBAC) e de Negócio
+api -> api : Valida token JWT e permissões do usuário
+api -> api : Verifica se o chamado já não foi assumido por outro
+
+alt Validação Falha (Chamado já atribuído)
+    api --> pwa : Retorna Erro (HTTP 409 Conflict)
+    pwa --> tecnico : Exibe aviso: "Este chamado já foi assumido"
+else Validação Bem-sucedida
+    ' Atualização do Banco de Dados
+    api -> db : UPDATE chamados SET status = 'Em Andamento',\nprioridade = {nova}, tecnico_id = {id}
+    activate db
+    db --> api : Confirma alteração
+    deactivate db
+    
+    ' Trilha de Auditoria (Essencial conforme requisitos)
+    api -> db : INSERT INTO log_auditoria\n(Ação: Triagem/Atribuição, Valores Antigos/Novos)
+    activate db
+    db --> api : Confirmação de log
+    deactivate db
+    
+    ' Retorno de Sucesso
+    api --> pwa : Retorna Sucesso (HTTP 200 OK) e dados atualizados
+    pwa --> tecnico : Move o card para a coluna "Em Andamento"\ne exibe notificação de sucesso
+end
+deactivate api
+
+@enduml

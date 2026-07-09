@@ -1,0 +1,57 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Técnico / Admin" as user
+participant "Interface (PWA)\nQuadro Kanban" as pwa
+participant "Backend API (Java)" as api
+database "Banco de Dados" as db
+
+== Carregamento do Quadro Kanban ==
+
+user -> pwa : Acessa a aba "Quadro de Chamados"
+pwa -> api : GET /chamados (Filtrando chamados ativos)
+
+activate api
+api -> db : SELECT * FROM chamados WHERE status != 'Fechado'
+activate db
+db --> api : Retorna lista de chamados
+deactivate db
+
+api -> api : Agrupa os chamados em\narrays por Status
+api --> pwa : Retorna JSON estruturado\n(Aberto, Em Andamento, Aguardando, Resolvido)
+deactivate api
+
+pwa --> user : Renderiza colunas do Kanban e distribui os cards
+
+== Movimentação de Card (Drag and Drop) ==
+
+user -> pwa : Arrasta um card (Ticket)\npara uma nova coluna (ex: 'Em Andamento')
+pwa -> api : PATCH /chamados/{id}/status\n(Payload: novo_status)
+
+activate api
+api -> api : Valida token JWT
+api -> api : Valida máquina de estados\n(ex: 'Aberto' pode transitar para 'Em Andamento'?)
+
+alt Transição Válida (Caminho Feliz)
+    api -> db : UPDATE chamados SET status = {novo_status}
+    activate db
+    db --> api : Confirmação
+    deactivate db
+
+    ' Rastreabilidade inegociável
+    api -> db : INSERT INTO log_auditoria\n(Ação: Movimentação Kanban, Antigo/Novo)
+    
+    api --> pwa : Retorna Sucesso (HTTP 200 OK)
+    pwa --> user : Animação de sucesso e fixa o card na nova coluna
+else Transição Inválida (Bloqueio de Regra de Negócio)
+    api --> pwa : Retorna Erro (HTTP 422 Unprocessable Entity)
+    pwa --> user : Reverte o card para a coluna original\ne exibe alerta: "Transição de status não permitida"
+end
+deactivate api
+
+@enduml

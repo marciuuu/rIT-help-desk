@@ -1,0 +1,81 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Técnico" as tecnico
+actor "Solicitante" as solicitante
+participant "Interface (PWA)" as pwa
+participant "Backend API (Java)" as api
+database "Banco de Dados" as db
+participant "Serviço de\nNotificação" as notif
+
+== Parte A: Resolução pelo Técnico ==
+
+tecnico -> pwa : Preenche a "Solução Aplicada"\ne clica em "Resolver Chamado"
+pwa -> api : PUT /chamados/{id}/resolucao\n(Payload: texto_solucao)
+
+activate api
+api -> api : Valida token JWT e permissões
+
+' Atualização no Banco de Dados
+api -> db : UPDATE chamados SET status = 'Resolvido',\nsolucao_aplicada = {texto}
+activate db
+db --> api : Confirmação
+deactivate db
+
+' Trilha de Auditoria
+api -> db : INSERT INTO log_auditoria\n(Ação: Resolução, Antigo: 'Em Andamento', Novo: 'Resolvido')
+
+' Disparo de Notificação para Homologação
+api -> notif : Alerta de Resolução (Ação Necessária)
+activate notif
+notif --> solicitante : Envia E-mail/Notificação PWA\n"Seu chamado foi resolvido. Aprove ou recuse."
+deactivate notif
+
+api --> pwa : Retorna Sucesso (HTTP 200 OK)
+pwa --> tecnico : Exibe ticket como 'Resolvido' (Somente Leitura)
+deactivate api
+
+== Parte B: Homologação pelo Solicitante ==
+
+solicitante -> pwa : Acessa o chamado para avaliar a solução
+
+alt Homologação Aceita (Fechamento e SLA)
+    solicitante -> pwa : Clica em "Aceitar Resolução"
+    pwa -> api : PUT /chamados/{id}/fechar
+    activate api
+    
+    api -> api : Congela o cronômetro do chamado
+    api -> api : Calcula o tempo final do SLA de Resolução
+    
+    api -> db : UPDATE chamados SET status = 'Fechado',\ntempo_sla = {calculado}
+    api -> db : INSERT INTO log_auditoria\n(Ação: Encerramento Definitivo)
+    
+    api --> pwa : Retorna Sucesso (HTTP 200 OK)
+    pwa --> solicitante : Arquiva o chamado e exibe mensagem de sucesso
+    deactivate api
+
+else Homologação Recusada (Reabertura)
+    solicitante -> pwa : Preenche justificativa e clica em "Recusar"
+    pwa -> api : PUT /chamados/{id}/reabrir\n(Payload: justificativa)
+    activate api
+    
+    api -> db : INSERT INTO interacoes (texto = justificativa, tipo = 'PUBLICO')
+    api -> db : UPDATE chamados SET status = 'Em Andamento'
+    api -> db : INSERT INTO log_auditoria\n(Ação: Reabertura, Antigo: 'Resolvido', Novo: 'Em Andamento')
+    
+    api -> notif : Alerta de Reabertura
+    activate notif
+    notif --> tecnico : Notifica Técnico: "O usuário reabriu o ticket"
+    deactivate notif
+    
+    api --> pwa : Retorna Sucesso (HTTP 200 OK)
+    pwa --> solicitante : Retorna o status para "Em Andamento" e libera edição
+    deactivate api
+end
+
+@enduml

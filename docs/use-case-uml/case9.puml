@@ -1,0 +1,55 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Administrador" as admin
+participant "Interface (PWA)\nDashboards" as pwa
+participant "Backend API (Java)" as api
+database "Banco de Dados" as db
+
+== Solicitação de Dados Analíticos ==
+
+admin -> pwa : Acessa a área de "Relatórios e Métricas"
+pwa --> admin : Exibe formulário de filtros (Data, Categoria, Setor, Técnico)
+
+admin -> pwa : Preenche os filtros (ex: Últimos 30 dias)\ne clica em "Gerar Relatório"
+
+' Os filtros são passados como Query Parameters na URL
+pwa -> api : GET /relatorios/metricas?dataInicio=X&dataFim=Y&setor=Z
+
+activate api
+api -> api : Valida token JWT (Requer Role = 'ADMIN')
+
+== Processamento e Agregação (Backend e DB) ==
+
+' O agrupamento deve ser feito no banco para poupar memória do Java
+api -> db : SELECT COUNT(id) as volume,\nAVG(tempo_sla) as tempo_medio\nFROM chamados\nWHERE data BETWEEN X AND Y\nGROUP BY categoria_id
+activate db
+db --> api : Retorna dados agregados
+deactivate db
+
+api -> db : SELECT tecnico_id, COUNT(id) FROM chamados\nWHERE status = 'Resolvido'\nGROUP BY tecnico_id
+activate db
+db --> api : Retorna ranking de produtividade
+deactivate db
+
+api -> api : Processa os retornos e\nformata o objeto JSON final\n(Métricas Globais, Gargalos, Ranking)
+
+api --> pwa : Retorna dados compilados (HTTP 200 OK)
+deactivate api
+
+== Renderização Visual ==
+
+pwa -> pwa : Converte os dados JSON em gráficos\n(Pizza, Barras, Linha do Tempo)
+pwa --> admin : Renderiza o Dashboard Interativo na tela
+
+' Ação opcional de exportação
+admin -> pwa : Clica em "Exportar para PDF/Excel"
+pwa -> pwa : Gera o arquivo estático a partir\ndos dados já carregados em tela
+pwa --> admin : Inicia o download do arquivo
+
+@enduml

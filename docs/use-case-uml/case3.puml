@@ -1,0 +1,78 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Técnico" as tecnico
+actor "Solicitante" as solicitante
+participant "Interface (PWA)" as pwa
+participant "Backend API (Java)" as api
+database "Banco de Dados" as db
+participant "Serviço de\nNotificação" as notif
+
+== Parte A: Interação Iniciada pelo Técnico ==
+
+tecnico -> pwa : Digita a mensagem no painel do chamado
+
+alt Fluxo Principal: Comentário Público (Solicitação de Dados)
+    pwa -> api : POST /chamados/{id}/interacoes\n(Payload: texto, visibilidade='PUBLICO')
+    activate api
+    api -> api : Valida token JWT e perfil Técnico
+    
+    ' Persistência e alteração de estado
+    api -> db : INSERT INTO interacoes (chamado_id, texto, tipo='PUBLICO')
+    api -> db : UPDATE chamados SET status = 'Aguardando Usuário'
+    
+    ' Trilha de auditoria obrigatória
+    api -> db : INSERT INTO log_auditoria\n(Ação: Mudança de Status, Antigo: 'Em Andamento', Novo: 'Aguardando Usuário')
+    
+    ' Sistema dispara a notificação em tempo real
+    api -> notif : Envia alerta de nova mensagem
+    activate notif
+    notif --> solicitante : Notifica Solicitante (E-mail / PWA)
+    deactivate notif
+    
+    api --> pwa : Retorna Sucesso (HTTP 201 Created)
+    pwa --> tecnico : Atualiza a timeline e move o status para "Aguardando Usuário"
+    deactivate api
+
+else Fluxo Alternativo: Nota Interna (Oculta para o Solicitante)
+    pwa -> api : POST /chamados/{id}/interacoes\n(Payload: texto, visibilidade='INTERNO')
+    activate api
+    api -> api : Valida permissão interna de TI
+    
+    api -> db : INSERT INTO interacoes (chamado_id, texto, tipo='INTERNO')
+    api -> db : INSERT INTO log_auditoria\n(Ação: Registro de Nota Técnica Interna)
+    
+    api --> pwa : Retorna Sucesso (HTTP 201 Created)
+    pwa --> tecnico : Exibe a nota destacada com marcador "Privado (Apenas TI)"
+    deactivate api
+end
+
+== Parte B: Resposta do Solicitante ==
+
+solicitante -> pwa : Abre a notificação, digita a resposta e clica em "Enviar"
+pwa -> api : POST /chamados/{id}/interacoes\n(Payload: texto, visibilidade='PUBLICO')
+
+activate api
+api -> api : Valida token JWT do Solicitante
+
+' Persistência e retorno ao fluxo técnico
+api -> db : INSERT INTO interacoes (chamado_id, texto, tipo='PUBLICO')
+api -> db : UPDATE chamados SET status = 'Em Andamento'
+api -> db : INSERT INTO log_auditoria\n(Ação: Mudança de Status, Antigo: 'Aguardando Usuário', Novo: 'Em Andamento')
+
+' Sistema alerta o técnico responsável
+api -> notif : Envia alerta de resposta recebida
+activate notif
+notif --> tecnico : Notifica Técnico Atribuído (E-mail / PWA)
+deactivate notif
+
+api --> pwa : Retorna Sucesso (HTTP 201 Created)
+pwa --> solicitante : Adiciona a resposta na timeline do painel
+deactivate api
+
+@enduml

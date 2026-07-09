@@ -1,0 +1,84 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Administrador" as admin
+participant "Interface (PWA)" as pwa
+participant "Backend API (Java)" as api
+database "Banco de Dados" as db
+
+== Gestão de Usuários e Perfis ==
+
+admin -> pwa : Acessa painel de "Gestão de Usuários"
+pwa -> api : GET /usuarios
+
+activate api
+' Validação crucial de segurança
+api -> api : Valida token JWT (Requer Role = 'ADMIN')
+api -> db : SELECT * FROM usuarios
+activate db
+db --> api : Retorna lista de usuários e perfis
+deactivate db
+api --> pwa : Retorna array JSON
+deactivate api
+
+pwa --> admin : Exibe listagem na interface
+
+admin -> pwa : Preenche dados (nome, e-mail, perfil)\ne clica em "Salvar Novo Usuário"
+pwa -> api : POST /usuarios
+
+activate api
+api -> api : Valida token JWT (Requer Role = 'ADMIN')
+api -> api : Valida regras de negócio\n(ex: e-mail já cadastrado?)
+
+alt Validação Bem-sucedida
+    api -> api : Criptografa a senha (Hash BCrypt)
+    api -> db : INSERT INTO usuarios (dados, perfil_id, hash_senha)
+    activate db
+    db --> api : Confirmação
+    deactivate db
+    
+    api -> db : INSERT INTO log_auditoria\n(Ação: Cadastro de Usuário)
+    api --> pwa : Retorna Sucesso (HTTP 201 Created)
+    pwa --> admin : Exibe alerta "Usuário cadastrado com sucesso"
+else E-mail Duplicado
+    api --> pwa : Retorna Erro (HTTP 409 Conflict)
+    pwa --> admin : Exibe alerta "Este e-mail já existe no sistema"
+end
+deactivate api
+
+== Gestão de Árvore de Categorias ==
+
+admin -> pwa : Acessa painel de "Categorias de Serviço"
+pwa -> api : GET /categorias
+
+activate api
+api -> db : SELECT * FROM categorias ORDER BY hierarquia
+activate db
+db --> api : Retorna categorias
+deactivate db
+api --> pwa : Retorna array JSON
+deactivate api
+
+pwa --> admin : Exibe árvore de categorias (ex: Hardware > Memória)
+
+admin -> pwa : Adiciona nova subcategoria\ne clica em "Salvar"
+pwa -> api : POST /categorias\n(Payload: nome, categoria_pai_id)
+
+activate api
+api -> api : Valida token JWT (Requer Role = 'ADMIN')
+api -> db : INSERT INTO categorias (nome, categoria_pai_id)
+activate db
+db --> api : Confirmação
+deactivate db
+
+api -> db : INSERT INTO log_auditoria\n(Ação: Criação de Categoria)
+api --> pwa : Retorna Sucesso (HTTP 201 Created)
+pwa --> admin : Atualiza a árvore visual na tela
+deactivate api
+
+@enduml

@@ -1,0 +1,71 @@
+@startuml
+' Configurações visuais
+skinparam maxMessageSize 150
+skinparam handwritten false
+skinparam responseMessageBelowArrow true
+autonumber
+
+' Atores e Participantes
+actor "Técnico / Admin" as user
+participant "Agendador de Tarefas\n(Cron Job Java)" as cron
+participant "Backend API (Java)" as api
+database "Banco de Dados" as db
+participant "Serviço de\nNotificação" as notif
+
+== Verificação Contínua de SLA ==
+note over cron, api: Rotina automática executada pelo servidor\na cada X minutos (ex: a cada 5 min).
+
+cron -> api : Dispara rotina verificarSlaChamados()
+activate api
+
+' 1. Busca apenas os chamados que o relógio ainda está correndo
+api -> db : SELECT * FROM chamados\nWHERE status IN ('Aberto', 'Em Andamento', 'Aguardando Usuário')
+activate db
+db --> api : Retorna lista de chamados ativos
+deactivate db
+
+' 2. Laço de repetição para avaliar ticket por ticket
+loop Para cada chamado ativo
+    api -> api : Calcula tempo restante cruzando:\nData de Abertura x Prazo da Prioridade
+
+    alt SLA Próximo do Vencimento (Alerta Preventivo)
+        api -> api : Verifica se o aviso já foi enviado antes
+        
+        ' Evita spam disparando apenas uma vez
+        api -> notif : Dispara Alerta Preventivo
+        activate notif
+        notif --> user : Notifica: "Atenção: Chamado #ID vence em 1 hora"
+        deactivate notif
+        
+        api -> db : UPDATE chamados SET alerta_sla_enviado = true
+        
+    else SLA Vencido (Violação do Prazo)
+        api -> api : Verifica se a violação já foi registrada
+        
+        ' Grava a penalidade no banco de forma definitiva
+        api -> db : UPDATE chamados SET sla_violado = true
+        activate db
+        db --> api : Confirmação
+        deactivate db
+        
+        ' O histórico precisa constar que o prazo estourou
+        api -> db : INSERT INTO log_auditoria\n(Ação: Violação de SLA de Resolução)
+        
+        api -> notif : Dispara Alerta Crítico
+        activate notif
+        notif --> user : Notifica: "Crítico: SLA do Chamado #ID rompido"
+        deactivate notif
+    end
+end
+
+api --> cron : Finaliza ciclo de verificação
+deactivate api
+
+== Reflexo Visual na Interface ==
+
+user -> pwa : Acessa fila de chamados (Backlog/Kanban)
+pwa -> api : GET /chamados
+api --> pwa : Retorna dados (incluindo flags sla_violado = true)
+pwa --> user : Renderiza cards com marcadores visuais\n(ex: Badge vermelho ou borda destacada)
+
+@enduml

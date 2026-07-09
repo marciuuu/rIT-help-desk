@@ -1,0 +1,38 @@
+@startuml
+' Configurações visuais
+skinparam state {
+  BackgroundColor White
+  BorderColor Black
+  ArrowColor #333333
+}
+skinparam handwritten false
+
+' Título opcional para o diagrama
+title Ciclo de Vida do Chamado (State Machine)
+
+' Início do ciclo
+[*] -> Aberto : Solicitante abre o chamado
+
+' Definição dos Estados
+state Aberto
+state "Em Andamento" as EmAndamento
+state "Aguardando Usuário" as Aguardando
+state Resolvido
+state Fechado
+
+' Transições principais (Lista de Eventos)
+Aberto --> EmAndamento : Técnico assume o atendimento\n[Evento: Triagem]
+
+EmAndamento --> Aguardando : Técnico solicita informações\n[Evento: Interação Externa]
+Aguardando --> EmAndamento : Solicitante responde\n[Evento: Atualização]
+
+EmAndamento --> Resolvido : Técnico aplica a solução\n[Evento: Resolução]
+
+' Fluxos de Homologação
+Resolvido --> Fechado : Solicitante aprova a solução\n[Evento: Aceite]
+Resolvido --> EmAndamento : Solicitante recusa a solução\n[Evento: Reabertura]
+
+' Fim do ciclo de vida
+Fechado -> [*] : Chamado encerrado\n(SLA finalizado)
+
+@enduml
