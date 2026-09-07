@@ -5,54 +5,64 @@ skinparam handwritten false
 skinparam responseMessageBelowArrow true
 autonumber
 
-' Atores e Participantes
 actor "Técnico / Admin" as user
 participant "Interface (PWA)" as pwa
-participant "Backend API (Java)" as api
-participant "Módulo de\nAuditoria" as audit
-database "Banco de Dados" as db
 
-== Parte A: Interceptação Automática e Invisível ==
-note over api, db : Qualquer ação de escrita (POST, PUT, PATCH) no sistema\naciona este fluxo de forma transparente.
+box "Qualquer Módulo (ex: Tickets / Auth)" #F0F8FF
+    participant "Service (Negócio)" as service
+end box
 
-[-> api : Recebe requisição de mudança (ex: alterar status)
-activate api
+box "Event Bus Interno" #FFFFE0
+    participant "Spring Event\nPublisher" as eventBus
+end box
 
-api -> api : Executa a regra de negócio principal
+box "Módulo: Governance" #F5F5F5
+    participant "AuditController\n(API)" as apiGov
+    participant "AuditLogService\n(Governança)" as gov
+    database "Banco de Dados" as db
+end box
 
-' O Módulo de auditoria intercepta a ação
-api -> audit : registrarLog(Ação, ValorAnterior, ValorNovo, UsuarioID)
-activate audit
+== Parte A: Interceptação Automática (Event-Driven) ==
+note over service, eventBus : Qualquer alteração de estado no sistema\ngera um evento de domínio, desacoplando o log da ação principal.
 
-audit -> audit : Captura o timestamp exato do servidor\ne estrutura o objeto de log
+[-> service : Executa transação principal\n(ex: alterar status do ticket)
+activate service
+service -> eventBus : publishEvent(EntidadeAlteradaEvent)
+service -->[ : Retorna sucesso IMEDIATO ao usuário (HTTP 20X)
+deactivate service
 
-audit -> db : INSERT INTO log_auditoria (tabela append-only)
+== Processamento em Segundo Plano (@Async) ==
+
+eventBus ->> gov : Recebe EntidadeAlteradaEvent
+activate gov
+gov -> gov : Captura timestamp exato\ne estrutura objeto imutável
+gov -> db : INSERT INTO log_auditoria (tabela append-only)
 activate db
-db --> audit : Confirmação de gravação
+db --> gov : Confirma gravação
 deactivate db
-
-audit --> api : Libera a requisição para prosseguir
-deactivate audit
-
-api -->[ : Retorna sucesso para o usuário final
-deactivate api
+deactivate gov
 
 == Parte B: Consulta da Linha do Tempo (Lifecycle) ==
 
-user -> pwa : Acessa os detalhes do chamado e clica\nna aba "Histórico / Auditoria"
-pwa -> api : GET /chamados/{id}/auditoria
+user -> pwa : Acessa detalhes do chamado\ne clica em "Histórico"
+pwa -> apiGov : GET /chamados/{id}/auditoria
+activate apiGov
 
-activate api
-api -> api : Valida token JWT e permissões de leitura
+apiGov -> gov : buscarHistoricoPorChamado(id)
+activate gov
+gov -> gov : Valida permissões de leitura do JWT
 
-api -> db : SELECT * FROM log_auditoria\nWHERE chamado_id = {id}\nORDER BY data_hora DESC
+gov -> db : SELECT * FROM log_auditoria\nWHERE chamado_id = {id} ORDER BY data_hora DESC
 activate db
-db --> api : Retorna todos os eventos cronológicos
+db --> gov : Retorna eventos cronológicos
 deactivate db
 
-api --> pwa : Retorna array JSON com o histórico completo
-deactivate api
+gov --> apiGov : Retorna DTOs
+deactivate gov
 
-pwa --> user : Renderiza uma linha do tempo visual\n(ex: "João alterou de Aberto para Em Andamento às 14:30")
+apiGov --> pwa : Retorna array JSON
+deactivate apiGov
+
+pwa --> user : Renderiza linha do tempo visual\n(ex: "João alterou de Aberto para Em Andamento às 14:30")
 
 @enduml

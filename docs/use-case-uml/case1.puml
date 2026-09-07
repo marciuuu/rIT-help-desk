@@ -5,12 +5,25 @@ skinparam handwritten false
 skinparam responseMessageBelowArrow true
 autonumber
 
-' Atores e Participantes
+' Atores e Interface
 actor "Solicitante" as user
 participant "Interface (PWA)" as pwa
-participant "Backend API (Java)" as api
-database "Banco de Dados" as db
-participant "Serviço de\nNotificação" as notif
+
+' Representação do Monólito Modular (Pacote por Componente)
+box "Módulo: Tickets (Core)" #F0F8FF
+    participant "TicketController\n(API)" as api
+    participant "TicketService\n(Negócio)" as service
+    database "Banco de Dados" as db
+end box
+
+box "Event Bus Interno" #FFFFE0
+    participant "Spring Event\nPublisher" as eventBus
+end box
+
+box "Módulos Secundários" #F5F5F5
+    participant "Módulo\nGovernance" as gov
+    participant "Módulo\nNotifications" as notif
+end box
 
 ' Início do Fluxo
 user -> pwa : Clica em "Novo Chamado"
@@ -19,41 +32,55 @@ api --> pwa : Retorna dados para popular o formulário
 pwa --> user : Exibe formulário de abertura
 
 user -> pwa : Preenche (Categoria, Título, Setor, Descrição, Anexos) e clica em "Enviar"
-pwa -> api : POST /chamados (Payload com os dados do ticket)
+pwa -> api : POST /chamados (Payload com dados)
 
 activate api
+api -> service : criarTicket(dados)
+activate service
+
 ' Bloco de Validação
-api -> api : Executa validações de regras de negócio\n(ex: campos obrigatórios, tamanho do título)
+service -> service : Executa validações de regras de negócio\n(ex: campos obrigatórios, tamanho)
 
 alt Validação Falha (Dados Inconsistentes)
+    service --> api : Lança exceção de negócio
     api --> pwa : Retorna erro (HTTP 400 Bad Request)
     pwa --> user : Exibe alerta para corrigir os campos
 else Validação Bem-sucedida
-    api -> api : Gera ID único do ticket
-    api -> api : Define status inicial = "Aberto"
+    service -> service : Gera ID único do ticket
+    service -> service : Define status inicial = "ABERTO"
     
-    ' Persistência de Dados
-    api -> db : INSERT INTO chamados (dados do ticket)
+    ' Persistência de Dados (Transação Principal)
+    service -> db : INSERT INTO chamados (dados do ticket)
     activate db
-    db --> api : Confirmação de gravação
+    db --> service : Confirmação de gravação
     deactivate db
     
-    ' Trilha de Auditoria
-    api -> db : INSERT INTO log_auditoria (TicketID, Ação: Abertura, Data/Hora)
-    activate db
-    db --> api : Confirmação de log salvo
-    deactivate db
+    ' Disparo do Evento de Domínio (Desacoplamento)
+    service -> eventBus : publishEvent(TicketCriadoEvent)
     
-    ' Disparo de Notificações
-    api -> notif : Dispara notificação (Fila Global de Técnicos)
-    activate notif
-    notif --> api : Confirmação de envio
-    deactivate notif
+    ' Retorno IMEDIATO para o usuário
+    service --> api : Retorna dados do ticket gerado
+    deactivate service
     
-    ' Retorno para o usuário
-    api --> pwa : Retorna sucesso (HTTP 201 Created) e dados do ticket gerado
-    pwa --> user : Redireciona para tela de "Chamado Aberto com Sucesso"
+    api --> pwa : Retorna sucesso (HTTP 201 Created)
+    pwa --> user : Redireciona para tela de "Sucesso"
 end
 deactivate api
+
+' ==========================================
+' PROCESSAMENTO ASSÍNCRONO (EM SEGUNDO PLANO)
+' ==========================================
+== Processamento em Segundo Plano (@Async) ==
+
+eventBus ->> gov : Recebe TicketCriadoEvent
+activate gov
+gov -> db : INSERT INTO log_auditoria (Ação: Abertura, Append-only)
+deactivate gov
+
+eventBus ->> notif : Recebe TicketCriadoEvent
+activate notif
+notif -> notif : Formata template de e-mail / payload do Telegram
+notif ->> : Dispara notificação (Fila Global) e E-mail (Solicitante)
+deactivate notif
 
 @enduml

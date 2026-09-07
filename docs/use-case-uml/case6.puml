@@ -5,11 +5,24 @@ skinparam handwritten false
 skinparam responseMessageBelowArrow true
 autonumber
 
-' Atores e Participantes
+' Atores e Interface
 actor "Técnico / Admin" as user
 participant "Interface (PWA)\nQuadro Kanban" as pwa
-participant "Backend API (Java)" as api
-database "Banco de Dados" as db
+
+' Representação do Monólito Modular
+box "Módulo: Tickets (Core)" #F0F8FF
+    participant "TicketController\n(API)" as api
+    participant "TicketService\n(Negócio)" as service
+    database "Banco de Dados" as db
+end box
+
+box "Event Bus Interno" #FFFFE0
+    participant "Spring Event\nPublisher" as eventBus
+end box
+
+box "Módulo: Governance" #F5F5F5
+    participant "AuditLogService\n(Governança)" as gov
+end box
 
 == Carregamento do Quadro Kanban ==
 
@@ -17,12 +30,17 @@ user -> pwa : Acessa a aba "Quadro de Chamados"
 pwa -> api : GET /chamados (Filtrando chamados ativos)
 
 activate api
-api -> db : SELECT * FROM chamados WHERE status != 'Fechado'
+api -> service : buscarChamadosAtivos()
+activate service
+service -> db : SELECT * FROM chamados WHERE status != 'FECHADO'
 activate db
-db --> api : Retorna lista de chamados
+db --> service : Retorna lista de chamados
 deactivate db
 
-api -> api : Agrupa os chamados em\narrays por Status
+service -> service : Agrupa os chamados em\narrays por Status
+service --> api : Retorna DTOs agrupados
+deactivate service
+
 api --> pwa : Retorna JSON estruturado\n(Aberto, Em Andamento, Aguardando, Resolvido)
 deactivate api
 
@@ -34,24 +52,39 @@ user -> pwa : Arrasta um card (Ticket)\npara uma nova coluna (ex: 'Em Andamento'
 pwa -> api : PATCH /chamados/{id}/status\n(Payload: novo_status)
 
 activate api
-api -> api : Valida token JWT
-api -> api : Valida máquina de estados\n(ex: 'Aberto' pode transitar para 'Em Andamento'?)
+api -> service : alterarStatusChamado(id, novo_status)
+activate service
+
+service -> service : Valida token JWT e permissões
+service -> service : Valida máquina de estados\n(ex: 'ABERTO' pode transitar para 'EM_ANDAMENTO'?)
 
 alt Transição Válida (Caminho Feliz)
-    api -> db : UPDATE chamados SET status = {novo_status}
+    service -> db : UPDATE chamados SET status = {novo_status}
     activate db
-    db --> api : Confirmação
+    db --> service : Confirmação
     deactivate db
 
-    ' Rastreabilidade inegociável
-    api -> db : INSERT INTO log_auditoria\n(Ação: Movimentação Kanban, Antigo/Novo)
+    ' Disparo de Evento de Domínio
+    service -> eventBus : publishEvent(TicketStatusAlteradoEvent)
+
+    service --> api : Retorna DTO atualizado
+    deactivate service
     
     api --> pwa : Retorna Sucesso (HTTP 200 OK)
     pwa --> user : Animação de sucesso e fixa o card na nova coluna
 else Transição Inválida (Bloqueio de Regra de Negócio)
+    service --> api : Lança Exceção (Unprocessable Entity)
     api --> pwa : Retorna Erro (HTTP 422 Unprocessable Entity)
-    pwa --> user : Reverte o card para a coluna original\ne exibe alerta: "Transição de status não permitida"
+    pwa --> user : Reverte o card para a coluna original\ne exibe alerta: "Transição não permitida"
 end
 deactivate api
+
+' Processamento Assíncrono
+== Processamento em Segundo Plano (@Async) ==
+
+eventBus ->> gov : Recebe TicketStatusAlteradoEvent
+activate gov
+gov -> db : INSERT INTO log_auditoria\n(Ação: Movimentação Kanban, Antigo/Novo)
+deactivate gov
 
 @enduml

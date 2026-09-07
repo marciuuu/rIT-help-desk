@@ -5,13 +5,26 @@ skinparam handwritten false
 skinparam responseMessageBelowArrow true
 autonumber
 
-' Atores e Participantes
+' Atores e Interface
 actor "Técnico" as tecnico
 actor "Solicitante" as solicitante
 participant "Interface (PWA)" as pwa
-participant "Backend API (Java)" as api
-database "Banco de Dados" as db
-participant "Serviço de\nNotificação" as notif
+
+' Representação do Monólito Modular
+box "Módulo: Tickets (Core)" #F0F8FF
+    participant "TicketController\n(API)" as api
+    participant "TicketService\n(Negócio)" as service
+    database "Banco de Dados" as db
+end box
+
+box "Event Bus Interno" #FFFFE0
+    participant "Spring Event\nPublisher" as eventBus
+end box
+
+box "Módulos Secundários" #F5F5F5
+    participant "Módulo\nGovernance" as gov
+    participant "Módulo\nNotifications" as notif
+end box
 
 == Parte A: Interação Iniciada pelo Técnico ==
 
@@ -20,36 +33,62 @@ tecnico -> pwa : Digita a mensagem no painel do chamado
 alt Fluxo Principal: Comentário Público (Solicitação de Dados)
     pwa -> api : POST /chamados/{id}/interacoes\n(Payload: texto, visibilidade='PUBLICO')
     activate api
-    api -> api : Valida token JWT e perfil Técnico
+    api -> service : adicionarInteracao(id, payload)
+    activate service
     
-    ' Persistência e alteração de estado
-    api -> db : INSERT INTO interacoes (chamado_id, texto, tipo='PUBLICO')
-    api -> db : UPDATE chamados SET status = 'Aguardando Usuário'
+    service -> service : Valida token JWT e perfil Técnico
     
-    ' Trilha de auditoria obrigatória
-    api -> db : INSERT INTO log_auditoria\n(Ação: Mudança de Status, Antigo: 'Em Andamento', Novo: 'Aguardando Usuário')
+    ' Persistência e alteração de estado (Transação Principal)
+    service -> db : INSERT INTO interacoes (chamado_id, texto, is_interna=false)
+    service -> db : UPDATE chamados SET status = 'AGUARDANDO_USUARIO'
     
-    ' Sistema dispara a notificação em tempo real
-    api -> notif : Envia alerta de nova mensagem
-    activate notif
-    notif --> solicitante : Notifica Solicitante (E-mail / PWA)
-    deactivate notif
+    ' Disparo de Evento de Domínio
+    service -> eventBus : publishEvent(TicketStatusAlteradoEvent)
     
+    ' Retorno imediato
+    service --> api : Retorna DTO da interação
+    deactivate service
     api --> pwa : Retorna Sucesso (HTTP 201 Created)
-    pwa --> tecnico : Atualiza a timeline e move o status para "Aguardando Usuário"
+    pwa --> tecnico : Atualiza a timeline e move status
     deactivate api
+
+    ' Processamento Assíncrono (Comentário Público)
+    note over eventBus, notif : Processamento em Segundo Plano (@Async)
+    
+    eventBus ->> gov : Recebe TicketStatusAlteradoEvent
+    activate gov
+    gov -> db : INSERT INTO log_auditoria\n(Ação: Mudança Status, Antigo: Em Andamento, Novo: Aguardando)
+    deactivate gov
+    
+    eventBus ->> notif : Recebe TicketStatusAlteradoEvent
+    activate notif
+    notif ->> solicitante : Notifica Solicitante assincronamente (E-mail / PWA)
+    deactivate notif
 
 else Fluxo Alternativo: Nota Interna (Oculta para o Solicitante)
     pwa -> api : POST /chamados/{id}/interacoes\n(Payload: texto, visibilidade='INTERNO')
     activate api
-    api -> api : Valida permissão interna de TI
+    api -> service : adicionarInteracao(id, payload)
+    activate service
     
-    api -> db : INSERT INTO interacoes (chamado_id, texto, tipo='INTERNO')
-    api -> db : INSERT INTO log_auditoria\n(Ação: Registro de Nota Técnica Interna)
+    service -> service : Valida permissão interna de TI
     
+    service -> db : INSERT INTO interacoes (chamado_id, texto, is_interna=true)
+    service -> eventBus : publishEvent(NotaInternaCriadaEvent)
+    
+    service --> api : Retorna DTO da interação
+    deactivate service
     api --> pwa : Retorna Sucesso (HTTP 201 Created)
-    pwa --> tecnico : Exibe a nota destacada com marcador "Privado (Apenas TI)"
+    pwa --> tecnico : Exibe a nota com marcador "Privado (Apenas TI)"
     deactivate api
+
+    ' Processamento Assíncrono (Nota Interna)
+    note over eventBus, gov : Processamento em Segundo Plano (@Async)
+    eventBus ->> gov : Recebe NotaInternaCriadaEvent
+    activate gov
+    gov -> db : INSERT INTO log_auditoria\n(Ação: Registro de Nota Interna)
+    deactivate gov
+    ' Nenhuma notificação é enviada para o solicitante
 end
 
 == Parte B: Resposta do Solicitante ==
@@ -58,21 +97,33 @@ solicitante -> pwa : Abre a notificação, digita a resposta e clica em "Enviar"
 pwa -> api : POST /chamados/{id}/interacoes\n(Payload: texto, visibilidade='PUBLICO')
 
 activate api
-api -> api : Valida token JWT do Solicitante
+api -> service : adicionarInteracao(id, payload)
+activate service
+service -> service : Valida token JWT do Solicitante
 
 ' Persistência e retorno ao fluxo técnico
-api -> db : INSERT INTO interacoes (chamado_id, texto, tipo='PUBLICO')
-api -> db : UPDATE chamados SET status = 'Em Andamento'
-api -> db : INSERT INTO log_auditoria\n(Ação: Mudança de Status, Antigo: 'Aguardando Usuário', Novo: 'Em Andamento')
+service -> db : INSERT INTO interacoes (chamado_id, texto, is_interna=false)
+service -> db : UPDATE chamados SET status = 'EM_ANDAMENTO'
 
-' Sistema alerta o técnico responsável
-api -> notif : Envia alerta de resposta recebida
-activate notif
-notif --> tecnico : Notifica Técnico Atribuído (E-mail / PWA)
-deactivate notif
+service -> eventBus : publishEvent(TicketStatusAlteradoEvent)
 
+service --> api : Retorna DTO da interação
+deactivate service
 api --> pwa : Retorna Sucesso (HTTP 201 Created)
-pwa --> solicitante : Adiciona a resposta na timeline do painel
+pwa --> solicitante : Adiciona a resposta na timeline
 deactivate api
+
+' Processamento Assíncrono (Resposta do Solicitante)
+note over eventBus, notif : Processamento em Segundo Plano (@Async)
+
+eventBus ->> gov : Recebe TicketStatusAlteradoEvent
+activate gov
+gov -> db : INSERT INTO log_auditoria\n(Ação: Mudança Status, Antigo: Aguardando, Novo: Em Andamento)
+deactivate gov
+
+eventBus ->> notif : Recebe TicketStatusAlteradoEvent
+activate notif
+notif ->> tecnico : Notifica Técnico Atribuído assincronamente (E-mail / PWA)
+deactivate notif
 
 @enduml

@@ -1,38 +1,40 @@
 @startuml
-' Configurações visuais
+' Configurações visuais profissionais
 skinparam state {
   BackgroundColor White
-  BorderColor Black
+  BorderColor #333333
   ArrowColor #333333
 }
 skinparam handwritten false
 
-' Título opcional para o diagrama
-title Ciclo de Vida do Chamado (State Machine)
+title Ciclo de Vida do Chamado (Máquina de Estados Orientada a Eventos)
+
+' Nota Arquitetural Global
+note "Diretriz Arquitetural:\nCada transição de estado emite um Evento de Domínio.\nOs módulos de Auditoria, Notificações e SLA escutam\nesses eventos e os processam em segundo plano (@Async)." as NoteArq
 
 ' Início do ciclo
-[*] -> Aberto : Solicitante abre o chamado
+[*] -> ABERTO : Solicitante abre o chamado\n[Emite TicketCriadoEvent]
 
-' Definição dos Estados
-state Aberto
-state "Em Andamento" as EmAndamento
-state "Aguardando Usuário" as Aguardando
-state Resolvido
-state Fechado
+' Definição dos Estados (Alinhados com o Enum StatusChamado)
+state ABERTO
+state EM_ANDAMENTO
+state AGUARDANDO_USUARIO
+state RESOLVIDO
+state FECHADO
 
-' Transições principais (Lista de Eventos)
-Aberto --> EmAndamento : Técnico assume o atendimento\n[Evento: Triagem]
+' Transições principais (Fluxo de Atendimento)
+ABERTO --> EM_ANDAMENTO : Técnico assume o atendimento\n[Emite TicketAtribuidoEvent]
 
-EmAndamento --> Aguardando : Técnico solicita informações\n[Evento: Interação Externa]
-Aguardando --> EmAndamento : Solicitante responde\n[Evento: Atualização]
+EM_ANDAMENTO --> AGUARDANDO_USUARIO : Técnico solicita informações\n[Emite TicketStatusAlteradoEvent]
+AGUARDANDO_USUARIO --> EM_ANDAMENTO : Solicitante responde\n[Emite TicketStatusAlteradoEvent]
 
-EmAndamento --> Resolvido : Técnico aplica a solução\n[Evento: Resolução]
+EM_ANDAMENTO --> RESOLVIDO : Técnico aplica a solução\n[Emite TicketResolvidoEvent]
 
-' Fluxos de Homologação
-Resolvido --> Fechado : Solicitante aprova a solução\n[Evento: Aceite]
-Resolvido --> EmAndamento : Solicitante recusa a solução\n[Evento: Reabertura]
+' Fluxos de Homologação (Fechamento ou Reabertura)
+RESOLVIDO --> FECHADO : Solicitante aprova a solução\n[Emite TicketFechadoEvent]
+RESOLVIDO --> EM_ANDAMENTO : Solicitante recusa a solução (Justificativa)\n[Emite TicketReabertoEvent]
 
 ' Fim do ciclo de vida
-Fechado -> [*] : Chamado encerrado\n(SLA finalizado)
+FECHADO -> [*] : Chamado arquivado\n(Cômputo final de SLA concluído)
 
 @enduml
