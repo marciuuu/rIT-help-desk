@@ -5,13 +5,26 @@ skinparam handwritten false
 skinparam responseMessageBelowArrow true
 autonumber
 
-' Atores e Participantes
+' Atores e Interface
 actor "Técnico" as tecnico
 actor "Solicitante" as solicitante
 participant "Interface (PWA)" as pwa
-participant "Backend API (Java)" as api
-database "Banco de Dados" as db
-participant "Serviço de\nNotificação" as notif
+
+' Representação do Monólito Modular
+box "Módulo: Tickets (Core)" #F0F8FF
+    participant "TicketController\n(API)" as api
+    participant "TicketService\n(Negócio)" as service
+    database "Banco de Dados" as db
+end box
+
+box "Event Bus Interno" #FFFFE0
+    participant "Spring Event\nPublisher" as eventBus
+end box
+
+box "Módulos Secundários" #F5F5F5
+    participant "Módulo\nGovernance" as gov
+    participant "Módulo\nNotifications" as notif
+end box
 
 == Parte A: Resolução pelo Técnico ==
 
@@ -19,26 +32,38 @@ tecnico -> pwa : Preenche a "Solução Aplicada"\ne clica em "Resolver Chamado"
 pwa -> api : PUT /chamados/{id}/resolucao\n(Payload: texto_solucao)
 
 activate api
-api -> api : Valida token JWT e permissões
+api -> service : resolverChamado(id, payload)
+activate service
 
-' Atualização no Banco de Dados
-api -> db : UPDATE chamados SET status = 'Resolvido',\nsolucao_aplicada = {texto}
+service -> service : Valida token JWT e permissões
+
+' Atualização no Banco de Dados (Transação Principal)
+service -> db : UPDATE chamados SET status = 'RESOLVIDO',\nsolucao_aplicada = {texto}
 activate db
-db --> api : Confirmação
+db --> service : Confirmação
 deactivate db
 
-' Trilha de Auditoria
-api -> db : INSERT INTO log_auditoria\n(Ação: Resolução, Antigo: 'Em Andamento', Novo: 'Resolvido')
+' Disparo de Evento de Domínio
+service -> eventBus : publishEvent(TicketResolvidoEvent)
 
-' Disparo de Notificação para Homologação
-api -> notif : Alerta de Resolução (Ação Necessária)
-activate notif
-notif --> solicitante : Envia E-mail/Notificação PWA\n"Seu chamado foi resolvido. Aprove ou recuse."
-deactivate notif
-
+' Retorno imediato
+service --> api : Retorna DTO atualizado
+deactivate service
 api --> pwa : Retorna Sucesso (HTTP 200 OK)
 pwa --> tecnico : Exibe ticket como 'Resolvido' (Somente Leitura)
 deactivate api
+
+' Processamento Assíncrono (Resolução)
+note over eventBus, notif : Processamento em Segundo Plano (@Async)
+eventBus ->> gov : Recebe TicketResolvidoEvent
+activate gov
+gov -> db : INSERT INTO log_auditoria\n(Ação: Resolução, Antigo: Em Andamento, Novo: Resolvido)
+deactivate gov
+
+eventBus ->> notif : Recebe TicketResolvidoEvent
+activate notif
+notif ->> solicitante : Envia E-mail/Notificação assincronamente\n"Seu chamado foi resolvido. Aprove ou recuse."
+deactivate notif
 
 == Parte B: Homologação pelo Solicitante ==
 
@@ -49,33 +74,55 @@ alt Homologação Aceita (Fechamento e SLA)
     pwa -> api : PUT /chamados/{id}/fechar
     activate api
     
-    api -> api : Congela o cronômetro do chamado
-    api -> api : Calcula o tempo final do SLA de Resolução
+    api -> service : fecharChamado(id)
+    activate service
+    service -> db : UPDATE chamados SET status = 'FECHADO',\ndata_fechamento = NOW()
     
-    api -> db : UPDATE chamados SET status = 'Fechado',\ntempo_sla = {calculado}
-    api -> db : INSERT INTO log_auditoria\n(Ação: Encerramento Definitivo)
+    service -> eventBus : publishEvent(TicketFechadoEvent)
     
+    service --> api : Retorna DTO atualizado
+    deactivate service
     api --> pwa : Retorna Sucesso (HTTP 200 OK)
     pwa --> solicitante : Arquiva o chamado e exibe mensagem de sucesso
     deactivate api
+
+    ' Processamento Assíncrono (Fechamento)
+    eventBus ->> gov : Recebe TicketFechadoEvent
+    activate gov
+    gov -> gov : Congela e finaliza o cômputo do SLA de Resolução
+    gov -> db : UPDATE sla_metricas SET tempo_final = {calculado}
+    gov -> db : INSERT INTO log_auditoria\n(Ação: Encerramento Definitivo)
+    deactivate gov
 
 else Homologação Recusada (Reabertura)
     solicitante -> pwa : Preenche justificativa e clica em "Recusar"
     pwa -> api : PUT /chamados/{id}/reabrir\n(Payload: justificativa)
     activate api
     
-    api -> db : INSERT INTO interacoes (texto = justificativa, tipo = 'PUBLICO')
-    api -> db : UPDATE chamados SET status = 'Em Andamento'
-    api -> db : INSERT INTO log_auditoria\n(Ação: Reabertura, Antigo: 'Resolvido', Novo: 'Em Andamento')
+    api -> service : reabrirChamado(id, payload)
+    activate service
     
-    api -> notif : Alerta de Reabertura
-    activate notif
-    notif --> tecnico : Notifica Técnico: "O usuário reabriu o ticket"
-    deactivate notif
+    service -> db : INSERT INTO interacoes (texto = justificativa, is_interna = false)
+    service -> db : UPDATE chamados SET status = 'EM_ANDAMENTO'
     
+    service -> eventBus : publishEvent(TicketReabertoEvent)
+    
+    service --> api : Retorna DTO atualizado
+    deactivate service
     api --> pwa : Retorna Sucesso (HTTP 200 OK)
-    pwa --> solicitante : Retorna o status para "Em Andamento" e libera edição
+    pwa --> solicitante : Retorna status para "Em Andamento" e libera edição
     deactivate api
+
+    ' Processamento Assíncrono (Reabertura)
+    eventBus ->> gov : Recebe TicketReabertoEvent
+    activate gov
+    gov -> db : INSERT INTO log_auditoria\n(Ação: Reabertura, Antigo: Resolvido, Novo: Em Andamento)
+    deactivate gov
+    
+    eventBus ->> notif : Recebe TicketReabertoEvent
+    activate notif
+    notif ->> tecnico : Notifica Técnico assincronamente: "Usuário reabriu o ticket"
+    deactivate notif
 end
 
 @enduml

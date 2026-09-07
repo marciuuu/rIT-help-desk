@@ -5,55 +5,89 @@ skinparam handwritten false
 skinparam responseMessageBelowArrow true
 autonumber
 
-' Atores e Participantes
+' Atores e Interface
 actor "Técnico / Admin" as tecnico
 participant "Interface (PWA)" as pwa
-participant "Backend API (Java)" as api
-database "Banco de Dados" as db
+
+' Representação do Monólito Modular
+box "Módulo: Tickets (Core)" #F0F8FF
+    participant "TicketController\n(API)" as api
+    participant "TicketService\n(Negócio)" as service
+    database "Banco de Dados" as db
+end box
+
+box "Event Bus Interno" #FFFFE0
+    participant "Spring Event\nPublisher" as eventBus
+end box
+
+box "Módulo: Governance" #F5F5F5
+    participant "AuditLogService\n(Governança)" as gov
+end box
 
 ' 1. Consulta da Fila (Backlog)
 tecnico -> pwa : Acessa a Fila de Entrada (Backlog)
-pwa -> api : GET /chamados?status=Aberto
+pwa -> api : GET /chamados?status=ABERTO
 
 activate api
-api -> db : SELECT * FROM chamados WHERE status = 'Aberto'
+api -> service : buscarChamadosPorStatus("ABERTO")
+activate service
+service -> db : SELECT * FROM chamados WHERE status = 'ABERTO'
 activate db
-db --> api : Retorna lista de chamados
+db --> service : Retorna lista de chamados
 deactivate db
-api --> pwa : Retorna array de objetos JSON
+service --> api : Retorna DTOs dos chamados
+deactivate service
+api --> pwa : Retorna array JSON
 deactivate api
 
-pwa --> tecnico : Exibe quadro Kanban/Lista com os chamados
+pwa --> tecnico : Exibe quadro Kanban / Lista de Backlog
 
 ' 2. Interação e Atribuição
-tecnico -> pwa : Abre um chamado, define Prioridade\ne clica em "Assumir Chamado"
-pwa -> api : PUT /chamados/{id}/atribuicao\n(Payload: Prioridade, ID do Técnico)
+tecnico -> pwa : Abre chamado, define Prioridade\ne clica em "Assumir Chamado"
+pwa -> api : PUT /chamados/{id}/atribuicao\n(Payload: Prioridade, ID Técnico)
 
 activate api
-' Validação de Segurança (RBAC) e de Negócio
-api -> api : Valida token JWT e permissões do usuário
-api -> api : Verifica se o chamado já não foi assumido por outro
+api -> service : atribuirChamado(id, payload)
+activate service
+
+' Validação de Segurança e de Negócio
+service -> service : Valida permissões (RBAC)
+service -> service : Verifica se o chamado já foi assumido (Concorrência)
 
 alt Validação Falha (Chamado já atribuído)
+    service --> api : Lança Exceção (Conflito)
     api --> pwa : Retorna Erro (HTTP 409 Conflict)
     pwa --> tecnico : Exibe aviso: "Este chamado já foi assumido"
 else Validação Bem-sucedida
-    ' Atualização do Banco de Dados
-    api -> db : UPDATE chamados SET status = 'Em Andamento',\nprioridade = {nova}, tecnico_id = {id}
+    ' Atualização do Banco de Dados (Transação Principal)
+    service -> db : UPDATE chamados SET status = 'EM_ANDAMENTO',\nprioridade = {nova}, tecnico_id = {id}
     activate db
-    db --> api : Confirma alteração
+    db --> service : Confirma alteração
     deactivate db
     
-    ' Trilha de Auditoria (Essencial conforme requisitos)
-    api -> db : INSERT INTO log_auditoria\n(Ação: Triagem/Atribuição, Valores Antigos/Novos)
-    activate db
-    db --> api : Confirmação de log
-    deactivate db
+    ' Disparo do Evento de Domínio (Desacoplamento)
+    service -> eventBus : publishEvent(TicketAtribuidoEvent)
     
-    ' Retorno de Sucesso
-    api --> pwa : Retorna Sucesso (HTTP 200 OK) e dados atualizados
-    pwa --> tecnico : Move o card para a coluna "Em Andamento"\ne exibe notificação de sucesso
+    ' Retorno IMEDIATO para o usuário
+    service --> api : Retorna dados atualizados do ticket
+    deactivate service
+    
+    api --> pwa : Retorna Sucesso (HTTP 200 OK)
+    pwa --> tecnico : Move o card para a coluna "Em Andamento"\ne exibe notificação
 end
 deactivate api
+
+' ==========================================
+' PROCESSAMENTO ASSÍNCRONO (EM SEGUNDO PLANO)
+' ==========================================
+== Processamento em Segundo Plano (@Async) ==
+
+eventBus ->> gov : Recebe TicketAtribuidoEvent
+activate gov
+gov -> db : INSERT INTO log_auditoria\n(Ação: Triagem, Valores Antigos/Novos)
+activate db
+db --> gov : Confirma gravação imutável
+deactivate db
+deactivate gov
 
 @enduml

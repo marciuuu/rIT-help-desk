@@ -13,48 +13,47 @@ actor "Solicitante\n(Usuário Comum)" as solicitante
 actor "Técnico\n(Suporte)" as tecnico
 actor "Administrador\n(Gestor de TI)" as admin
 
-actor "Sistema\n(Automático)" as sistema
+actor "Sistema\n(Automático / Background)" as sistema
 
-package "rIT Help Desk — Escopo do Sistema" {
+package "rIT Help Desk — Monólito Modular" {
   
   ' Cenário 0
-  usecase "Cenário 0: Autenticação e Autorização\n(Login com JWT / RBAC)" as UC0
+  usecase "Cenário 0: Autenticação\n(JWT e Tabela Única)" as UC0
   
   ' Cenário 1
-  usecase "Cenário 1: Abertura de Chamado\n(Criação de Ticket)" as UC1
+  usecase "Cenário 1: Abertura de Chamado" as UC1
   
   ' Cenário 2
-  usecase "Cenário 2: Triagem e Atribuição\n(Gestão de Fila / Backlog)" as UC2
+  usecase "Cenário 2: Triagem e Atribuição" as UC2
   
   ' Cenário 3
-  usecase "Cenário 3: Atendimento e Comunicação\n(Interações e Notas Internas)" as UC3
+  usecase "Cenário 3: Atendimento e Comunicação" as UC3
   
   ' Cenário 4
-  usecase "Cenário 4: Resolução e Fechamento\n(Homologação ou Reabertura)" as UC4
+  usecase "Cenário 4: Resolução e Fechamento\n(Homologação/Reabertura)" as UC4
   
   ' Cenário 5
-  usecase "Cenário 5: Gestão de Usuários\ne Categorias" as UC5
+  usecase "Cenário 5: Gestão de Usuários\ne Categorias (RBAC)" as UC5
   
   ' Cenário 6
   usecase "Cenário 6: Acompanhamento Visual\n(Quadro Kanban)" as UC6
   
   ' Cenário 7
-  usecase "Cenário 7: Rastreabilidade\n(Trilha de Auditoria Imutável)" as UC7
+  usecase "Cenário 7: Rastreabilidade\n(Auditoria Event-Driven)" as UC7
   
   ' Cenário 8
-  usecase "Cenário 8: Monitoramento de SLA\ne Notificações" as UC8
+  usecase "Cenário 8: Monitoramento SLA\ne Notificações" as UC8
   
   ' Cenário 9
-  usecase "Cenário 9: Extração de Métricas\ne Relatórios Gerenciais" as UC9
+  usecase "Cenário 9: Extração de Métricas\ne Dashboards" as UC9
 }
 
-' --- VÍNCULOS DO SOLICITANTE ---
+' --- VÍNCULOS DOS ATORES HUMANOS ---
 solicitante --> UC0
 solicitante --> UC1
 solicitante --> UC3
 solicitante --> UC4
 
-' --- VÍNCULOS DO TÉCNICO ---
 tecnico --> UC0
 tecnico --> UC2
 tecnico --> UC3
@@ -62,7 +61,6 @@ tecnico --> UC4
 tecnico --> UC6
 tecnico --> UC7
 
-' --- VÍNCULOS DO ADMINISTRADOR ---
 admin --> UC0
 admin --> UC2
 admin --> UC5
@@ -70,14 +68,16 @@ admin --> UC6
 admin --> UC7
 admin --> UC9
 
-' --- VÍNCULOS DO SISTEMA AUTOMÁTICO ---
-UC0 --> sistema : Geração de Token
-UC1 --> sistema : Disparo de Alertas
-UC3 --> sistema : Registro de Histórico
-UC4 --> sistema : Cômputo de SLA
-UC6 --> sistema : Intercepção de Status
-UC7 --> sistema : Gravação de Log
-UC8 --> sistema : Cálculo de Tempo
-UC9 --> sistema : Compilação de Dados
+' --- VÍNCULOS DO SISTEMA AUTOMÁTICO (ASSÍNCRONO E EVENTOS) ---
+UC0 --> sistema : Validação JWT
+UC1 --> sistema : Evento: Ticket Criado (Notificar)
+UC3 --> sistema : Evento: Interação (Alertar)
+UC4 --> sistema : Evento: Resolução (Congelar SLA)
+UC6 --> sistema : Evento: Transição (Auditar Kanban)
+
+' Inversão de direção para tarefas iniciadas ativamente pelo sistema
+sistema --> UC7 : Gravação Imutável em Segundo Plano
+sistema --> UC8 : Varredura Contínua (Cron Job)
+UC9 --> sistema : Agregação de Dados no Banco
 
 @enduml

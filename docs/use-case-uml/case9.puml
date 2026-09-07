@@ -5,11 +5,16 @@ skinparam handwritten false
 skinparam responseMessageBelowArrow true
 autonumber
 
-' Atores e Participantes
+' Atores e Interface
 actor "Administrador" as admin
 participant "Interface (PWA)\nDashboards" as pwa
-participant "Backend API (Java)" as api
-database "Banco de Dados" as db
+
+' Representação do Monólito Modular
+box "Módulo: Governance e Analytics" #F5F5F5
+    participant "RelatorioController\n(API)" as api
+    participant "RelatorioService\n(Negócio)" as service
+    database "Banco de Dados" as db
+end box
 
 == Solicitação de Dados Analíticos ==
 
@@ -22,24 +27,30 @@ admin -> pwa : Preenche os filtros (ex: Últimos 30 dias)\ne clica em "Gerar Rel
 pwa -> api : GET /relatorios/metricas?dataInicio=X&dataFim=Y&setor=Z
 
 activate api
-api -> api : Valida token JWT (Requer Role = 'ADMIN')
+api -> service : gerarMetricasGlobais(filtros)
+activate service
+
+service -> service : Valida token JWT (Role = 'ADMIN')
 
 == Processamento e Agregação (Backend e DB) ==
 
 ' O agrupamento deve ser feito no banco para poupar memória do Java
-api -> db : SELECT COUNT(id) as volume,\nAVG(tempo_sla) as tempo_medio\nFROM chamados\nWHERE data BETWEEN X AND Y\nGROUP BY categoria_id
+service -> db : SELECT COUNT(id) as volume, AVG(tempo_sla) as tempo_medio\nFROM chamados WHERE data BETWEEN X AND Y\nGROUP BY categoria_id
 activate db
-db --> api : Retorna dados agregados
+db --> service : Retorna dados agregados
 deactivate db
 
-api -> db : SELECT tecnico_id, COUNT(id) FROM chamados\nWHERE status = 'Resolvido'\nGROUP BY tecnico_id
+service -> db : SELECT tecnico_id, COUNT(id) FROM chamados\nWHERE status IN ('RESOLVIDO', 'FECHADO')\nGROUP BY tecnico_id
 activate db
-db --> api : Retorna ranking de produtividade
+db --> service : Retorna ranking de produtividade
 deactivate db
 
-api -> api : Processa os retornos e\nformata o objeto JSON final\n(Métricas Globais, Gargalos, Ranking)
+service -> service : Processa os retornos, calcula KPIs\ne formata o DTO (Data Transfer Object) final
 
-api --> pwa : Retorna dados compilados (HTTP 200 OK)
+service --> api : Retorna DTO compilado
+deactivate service
+
+api --> pwa : Retorna dados formatados (HTTP 200 OK)
 deactivate api
 
 == Renderização Visual ==
@@ -49,7 +60,7 @@ pwa --> admin : Renderiza o Dashboard Interativo na tela
 
 ' Ação opcional de exportação
 admin -> pwa : Clica em "Exportar para PDF/Excel"
-pwa -> pwa : Gera o arquivo estático a partir\ndos dados já carregados em tela
+pwa -> pwa : Gera o arquivo estático via lib Frontend\na partir dos dados já carregados em tela
 pwa --> admin : Inicia o download do arquivo
 
 @enduml

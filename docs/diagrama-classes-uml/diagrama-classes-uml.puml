@@ -13,13 +13,35 @@ skinparam linetype ortho
 skinparam nodesep 70
 skinparam ranksep 70
 
-' ================= Domínios =================
-package "Domínios (Enumeradores)" <<Rectangle>> {
+' ================= ARQUITETURA: PACOTE POR COMPONENTE =================
+
+package "Módulo: Identidade e Acesso (auth)" <<Folder>> {
   enum PerfilAcesso {
     ADMINISTRADOR
     TECNICO
     USUARIO_COMUM
   }
+
+  class Departamento {
+    - id: Long
+    - nome: String
+    - sigla: String
+  }
+
+  class Usuario {
+    - id: Long
+    - nome: String
+    - email: String
+    - hashSenha: String
+    - perfil: PerfilAcesso
+    - status: StatusUsuario
+    - matriculaTecnica: String <<Nullable>>
+    + autenticar(senhaString): boolean
+    + alterarPerfil(novoPerfil): void
+  }
+}
+
+package "Módulo: Gestão de Chamados (tickets)" <<Folder>> {
   enum StatusChamado {
     ABERTO
     EM_ANDAMENTO
@@ -27,93 +49,93 @@ package "Domínios (Enumeradores)" <<Rectangle>> {
     RESOLVIDO
     FECHADO
   }
+  
   enum NivelPrioridade {
     BAIXA
     MEDIA
     ALTA
     CRITICA
   }
+  
   enum TipoVisibilidade {
     PUBLICO
     INTERNO_TI
   }
+
+  class Categoria {
+    - id: Long
+    - nome: String
+    - descricao: String
+    - ativo: boolean
+  }
+
+  class Chamado {
+    - id: Long
+    - solicitanteId: Long
+    - tecnicoAtribuidoId: Long <<Nullable>>
+    - departamentoOrigemId: Long
+    - titulo: String
+    - descricao: String
+    - dataAbertura: LocalDateTime
+    - dataFechamento: LocalDateTime
+    - status: StatusChamado
+    - prioridade: NivelPrioridade
+    - tempoSlaHoras: Integer
+    - slaViolado: boolean
+    - solucaoAplicada: String
+    + atualizarStatus(novoStatus): void
+    + calcularSlaRestante(): Integer
+  }
+
+  class Comentario {
+    - id: Long
+    - autorId: Long
+    - texto: String
+    - dataHora: LocalDateTime
+    - visibilidade: TipoVisibilidade
+  }
+
+  class Anexo {
+    - id: Long
+    - nomeArquivo: String
+    - caminhoUrl: String
+    - tamanhoKb: Integer
+    - dataUpload: LocalDateTime
+  }
 }
 
-' ================= Entidades =================
-
-class Departamento {
-  - id: Long
-  - nome: String
-  - sigla: String
+package "Módulo: Governança e Auditoria (governance)" <<Folder>> {
+  class LogAuditoria {
+    - id: Long
+    - entidadeAlvoId: Long
+    - nomeEntidade: String
+    - payloadAlteracoes: String <<JSONB>>
+    - usuarioAutorId: Long
+    - dataHora: LocalDateTime
+  }
 }
 
-class Usuario {
-  - id: Long
-  - nome: String
-  - email: String
-  - hashSenha: String
-  - perfil: PerfilAcesso
-  - ativo: boolean
-  + autenticar(senhaString): boolean
-  + alterarPerfil(novoPerfil): void
-}
+' ================= Relacionamentos Internos dos Módulos =================
 
-class Categoria {
-  - id: Long
-  - nome: String
-  - descricao: String
-  - ativo: boolean
-}
-
-class Chamado {
-  - id: Long
-  - titulo: String
-  - descricao: String
-  - dataAbertura: LocalDateTime
-  - dataFechamento: LocalDateTime
-  - status: StatusChamado
-  - prioridade: NivelPrioridade
-  - tempoSlaHoras: Integer
-  - slaViolado: boolean
-  - solucaoAplicada: String
-  + atualizarStatus(novoStatus): void
-  + calcularSlaRestante(): Integer
-}
-
-class Comentario {
-  - id: Long
-  - texto: String
-  - dataHora: LocalDateTime
-  - visibilidade: TipoVisibilidade
-}
-
-class Anexo {
-  - id: Long
-  - nomeArquivo: String
-  - caminhoUrl: String
-  - tamanhoKb: Integer
-  - dataUpload: LocalDateTime
-}
-
-' ================= Relacionamentos Balanceados =================
-
-' Nível Superior
+' Auth (Hard References)
 Usuario "*" -up-> "1" Departamento : pertence a
 
-' Nível Central (Chamado no meio apontando para cima)
-Chamado "*" -up-> "1" Usuario : aberto por
-Chamado "*" -up-> "0..1" Usuario : atribuído a
-Chamado "*" -up-> "1" Departamento : origem da demanda
-
-' Categoria isolada à esquerda
+' Tickets (Hard References)
 Chamado "*" -left-> "1" Categoria : classificado em
 Categoria "0..1" -up-> "*" Categoria : subcategoria de
-
-' Comentário isolado à direita
 Chamado "1" *-right- "*" Comentario : contém
-Comentario "*" -up-> "1" Usuario : enviado por
-
-' Anexo isolado para baixo
 Chamado "1" *-down- "*" Anexo : possui
+
+' ================= Relacionamentos Cruzados (Soft References) =================
+
+note "Diretriz de Monólito Modular:\nRelacionamentos entre módulos usam referências por ID\ne setas de dependência fraca para garantir o baixo acoplamento." as N1
+
+' Tickets -> Auth (Dependência Fraca)
+Chamado ..> Usuario : solicitanteId /\ntecnicoAtribuidoId >
+Chamado ..> Departamento : departamentoOrigemId >
+Comentario ..> Usuario : autorId >
+
+' Governance -> Qualquer Módulo (Dependência Fraca)
+LogAuditoria ..> Usuario : usuarioAutorId >
 
 @enduml
